@@ -1,0 +1,131 @@
+<!doctype html>
+<!--
+  Copyright (c) 2026 Hiroaki Morooka（諸岡 宏明）.  All Rights Reserved.
+  病棟タスク依頼システム（LINE WORKS 連携・QR 方式）
+  著作者の事前の書面による許諾なく、複製・改変・再配布・他施設への展開はできません。
+-->
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="author" content="Hiroaki Morooka（諸岡 宏明）">
+<meta name="copyright" content="Copyright (c) 2026 Hiroaki Morooka（諸岡 宏明）. All Rights Reserved.">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>タスク送信</title>
+<style>
+  body{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Yu Gothic",sans-serif;
+       text-align:center;padding:36px 20px;color:#222;background:#fff}
+  .box{max-width:460px;margin:0 auto}
+  h1{font-size:19px;color:#444}
+  .info{color:#555;font-size:15px;margin:8px 0 18px}
+  .big{font-size:24px;font-weight:bold;margin:14px 0}
+  .ok{color:#1a7f5a}
+  .err{color:#c0392b}
+  .hint{color:#777;font-size:14px;margin-top:8px}
+  /* 送信後の「必ず閉じてください」案内（赤で目立たせる） */
+  #closewrap{display:none;margin-top:26px;padding:18px 14px;border:2px solid #c0392b;
+             border-radius:14px;background:#fff5f4}
+  #closewrap .warn{color:#c0392b;font-weight:bold;font-size:18px;line-height:1.6}
+  #closeBtn{font-size:18px;font-weight:bold;padding:16px 30px;border-radius:12px;border:0;
+            background:#c0392b;color:#fff;margin-top:14px;width:100%}
+  #closeNote{color:#c0392b;font-size:13px;margin-top:12px;display:none;line-height:1.5}
+  /* 二次的な「もう一度送る」（意図的な再送用・控えめ） */
+  #again{display:none;font-size:14px;padding:9px 18px;border-radius:10px;border:1px solid #bbb;
+         background:#f4f4f4;color:#555;margin-top:20px}
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>タスク送信</h1>
+  <div id="info" class="info"></div>
+  <div id="status" class="big">送信中…</div>
+  <div id="hint" class="hint"></div>
+
+  <div id="closewrap">
+    <div class="warn">⚠ 送信が完了しました<br>必ずこのページを閉じてください</div>
+    <button id="closeBtn">このページを閉じる</button>
+    <div id="closeNote">閉じられない場合は、ブラウザ下部の［タブ］ボタンからこの画面を閉じてください。<br>
+      （開いたままでも、再読み込みで再送されることはありません）</div>
+  </div>
+
+  <button id="again">もう一度送る（意図して再送する場合のみ）</button>
+</div>
+<script>
+  // GAS ウェブアプリ（宛先へ LINE WORKS 通知を出す本体）。
+  // ※ ここには患者情報も鍵も入りません。渡すのは 病棟 w / 宛先コード t / タスクNo. no（＋任意で優先度 p・期限 d）だけ。
+  var GAS = "https://script.google.com/macros/s/AKfycbxPhRi_TvZqVuxgBEwPSK6VBkQ4lLz_9ObjMeVvOG09zEGWz7n_NwgKumBHfmjYMWQjrw/exec";
+
+  function qs(k){ return new URLSearchParams(location.search).get(k) || ""; }
+  function enc(v){ return encodeURIComponent(v); }
+  var w = qs("w"), t = qs("t"), no = qs("no"), x = qs("x"), p = qs("p"), d = qs("d"), c = qs("c"), by = qs("by"), r = qs("r"), g = qs("g"), k = qs("k");
+
+  var elStatus   = document.getElementById("status");
+  var elHint     = document.getElementById("hint");
+  var elInfo     = document.getElementById("info");
+  var elClose    = document.getElementById("closewrap");
+  var elCloseBtn = document.getElementById("closeBtn");
+  var elCloseNote= document.getElementById("closeNote");
+  var elAgain    = document.getElementById("again");
+
+  var meta = [];
+  if (p) meta.push("優先度: " + p);
+  if (d) meta.push("期限: " + d);
+  elInfo.textContent = "【" + w + " → " + t + "】タスクNo." + no
+      + (c === "1" ? "（完了通知）" : "")
+      + (x === "1" ? "（消去通知）" : "")
+      + (meta.length ? "（" + meta.join(" / ") + "）" : "");
+
+  // 同じQRを一度送ったら、再読み込み・ブラウザ再起動では自動再送しない（localStorage に記録）。
+  // ＝ タブが復元されても、リロードしても、勝手にもう一度送られない。
+  var KEY = "tqr-sent:" + location.search;
+  function alreadySent(){ try { return !!localStorage.getItem(KEY); } catch(e){ return false; } }
+  function markSent(){ try { localStorage.setItem(KEY, "1"); } catch(e){} }
+
+  // 可能なら自動で閉じる。ただし QR/カメラから開いたタブは多くの端末（特に iPhone）で
+  // スクリプトからは閉じられない＝失敗しても無害。閉じられなければ案内を出す。
+  function tryClose(){ try { window.close(); } catch(e){} }
+
+  function showSent(isReload){
+    elStatus.className = "big ok";
+    elStatus.textContent = isReload ? "✓ 送信済み" : "✓ 送信しました";
+    elHint.textContent = "宛先の LINE WORKS に通知を送りました。";
+    elClose.style.display = "block";
+    elAgain.style.display = "inline-block";
+  }
+  function showError(){
+    elStatus.className = "big err"; elStatus.textContent = "送信できませんでした";
+    elHint.textContent = "電波を確認して［もう一度送る］を押してください。";
+    elClose.style.display = "none";
+    elAgain.style.display = "inline-block";
+  }
+  function showBad(){
+    elStatus.className = "big err"; elStatus.textContent = "URL が不正です";
+    elHint.textContent = "QR を作り直してください。";
+  }
+
+  function send(){
+    elStatus.className = "big"; elStatus.textContent = "送信中…";
+    elHint.textContent = ""; elClose.style.display = "none"; elAgain.style.display = "none";
+    var url = GAS + "?w=" + enc(w) + "&t=" + enc(t) + "&no=" + enc(no)
+                  + (x ? "&x=" + enc(x) : "") + (p ? "&p=" + enc(p) : "") + (d ? "&d=" + enc(d) : "")
+                  + (c ? "&c=" + enc(c) : "") + (by ? "&by=" + enc(by) : "") + (r ? "&r=" + enc(r) : "")
+                  + (g ? "&g=" + enc(g) : "") + (k ? "&k=" + enc(k) : "");
+    // Google のログイン判定を避けるため、Cookie を送らない匿名リクエストで叩く
+    fetch(url, { mode: "no-cors", credentials: "omit", cache: "no-store" })
+      .then(function(){ markSent(); showSent(false); tryClose(); })
+      .catch(function(){ showError(); });
+  }
+
+  elAgain.onclick = send;
+  elCloseBtn.onclick = function(){ tryClose(); elCloseNote.style.display = "block"; };
+
+  // 必須は w と no。宛先 t は「完了通知(c=1)」のときだけ省略可（完了は依頼者へ返るので宛先不要）。
+  if (!w || !no || (!t && c !== "1")) {
+    showBad();
+  } else if (alreadySent()) {
+    showSent(true);   // 再読み込み・再起動時は「送信済み」を表示するだけ（自動再送しない）
+  } else {
+    send();
+  }
+</script>
+</body>
+</html>
